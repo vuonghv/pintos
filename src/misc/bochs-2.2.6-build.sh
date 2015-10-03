@@ -8,7 +8,7 @@ if test -z "$SRCDIR" || test -z "$PINTOSDIR" || test -z "$DSTDIR"; then
     exit 1
 fi
 
-cd /tmp
+cd ~/opt
 mkdir $$
 cd $$
 mkdir bochs-2.2.6
