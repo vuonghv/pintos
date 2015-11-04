@@ -11,6 +11,8 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "devices/timer.h"
+#include "lib/kernel/list.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -23,6 +25,13 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
+
+/* List of processes in THREAD_SLEEP state, that is, processes
+ * that called timer_sleep() and haven't wake up yet.
+ * When wake up, they is putted in ready_list
+ * and change their state to THREAD_READY
+ */
+static struct list sleep_list;
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
@@ -91,6 +100,7 @@ thread_init (void)
 
   lock_init (&tid_lock);
   list_init (&ready_list);
+  list_init (&sleep_list);
   list_init (&all_list);
 
   /* Set up a thread structure for the running thread. */
@@ -301,15 +311,21 @@ thread_exit (void)
 void
 thread_yield (void) 
 {
-  struct thread *cur = thread_current ();
+  struct thread *cur = running_thread ();
   enum intr_level old_level;
   
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
+  if (cur != idle_thread && cur->status != THREAD_SLEEP)
     list_push_back (&ready_list, &cur->elem);
-  cur->status = THREAD_READY;
+  else if (cur != idle_thread && cur->status == THREAD_SLEEP)
+    list_push_back (&sleep_list, &cur->elem);
+
+
+  if (cur->status != THREAD_SLEEP)
+    cur->status = THREAD_READY;
+
   schedule ();
   intr_set_level (old_level);
 }
@@ -463,6 +479,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  t->wakeup_tick = 0;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -552,6 +569,21 @@ thread_schedule_tail (struct thread *prev)
 static void
 schedule (void) 
 {
+  // Wake up threads that expire sleep time
+  struct list_elem *e;
+  int64_t ticks = timer_ticks ();
+  for (e = list_begin (&sleep_list); e != list_end (&sleep_list);)
+  {
+      struct thread *t = list_entry (e, struct thread, elem);
+      if (ticks >= t->wakeup_tick) {
+          e = list_remove (e);
+          list_push_back (&ready_list, &t->elem);
+          t->status = THREAD_READY;
+          continue;
+      }
+      e = list_next (e);
+  }
+
   struct thread *cur = running_thread ();
   struct thread *next = next_thread_to_run ();
   struct thread *prev = NULL;
